@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Mean shift, passo dopo passo</title>
+<style>
+:root{--bg:#E8EDEF;--panel:#F7F9FA;--ink:#14232B;--mute:#5A6B74;--line:#C5D0D5;--pt:#4F6D7A;--win:#6B3FD4;--mean:#E89B00;
+--c0:#1B998B;--c1:#D1495B;--c2:#3D5A80;--c3:#C98A12;--c4:#7B4B94;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0F1A20;--panel:#172830;--ink:#E4EEF2;--mute:#8FA3AD;--line:#2A404B;--pt:#8DB0BF;--win:#A68BFF;--mean:#FFB627;--c0:#3CCFBE;--c1:#FF7587;--c2:#7FA3D6;--c3:#F2B84B;--c4:#C79BE0}}
+:root[data-theme="dark"]{--bg:#0F1A20;--panel:#172830;--ink:#E4EEF2;--mute:#8FA3AD;--line:#2A404B;--pt:#8DB0BF;--win:#A68BFF;--mean:#FFB627;--c0:#3CCFBE;--c1:#FF7587;--c2:#7FA3D6;--c3:#F2B84B;--c4:#C79BE0}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:920px;margin:0 auto;padding:20px 16px 32px}
+h1{font:600 clamp(28px,5vw,42px)/1.1 "Iowan Old Style",Georgia,serif;margin:0 0 6px;letter-spacing:-.01em}
+.sub{color:var(--mute);margin:0 0 18px;max-width:62ch}
+.stage{background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+canvas{display:block;width:100%;touch-action:none;cursor:crosshair}
+.bar{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;margin:14px 0}
+button,select{font:inherit;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:7px 13px;cursor:pointer}
+button:hover{border-color:var(--win)}
+button.pri{background:var(--win);border-color:var(--win);color:#fff}
+:root[data-theme="dark"] button.pri{color:#10101a}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) button.pri{color:#10101a}}
+button.on{border-color:var(--win);box-shadow:inset 0 0 0 1px var(--win)}
+:focus-visible{outline:2px solid var(--win);outline-offset:2px}
+label{display:flex;align-items:center;gap:8px;color:var(--mute);font-size:14px}
+input[type=range]{accent-color:var(--win);width:130px}
+.seg{display:flex;gap:0}.seg button:first-child{border-radius:6px 0 0 6px}.seg button:last-child{border-radius:0 6px 6px 0;border-left:0}
+.info{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin:0 0 14px}
+.info div{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px 12px}
+.info b{display:block;font-size:22px;font-variant-numeric:tabular-nums}
+.info span{font-size:13px;color:var(--mute)}
+#msg{background:var(--panel);border-left:4px solid var(--win);padding:10px 14px;border-radius:0 8px 8px 0;min-height:3.4em}
+.how{margin-top:22px;color:var(--mute);max-width:70ch}
+.how code{background:var(--panel);border:1px solid var(--line);padding:2px 6px;border-radius:4px;color:var(--ink);font-size:14px}
+.how h2{font:600 20px Georgia,serif;color:var(--ink);margin:0 0 6px}
+.leg{display:flex;gap:16px;flex-wrap:wrap;font-size:13px;color:var(--mute);margin-top:8px}
+.leg i{display:inline-block;width:11px;height:11px;border-radius:50%;margin-right:5px;vertical-align:-1px}
+</style>
+</head>
+<body>
+<main>
+<h1>Mean shift</h1>
+<p class="sub">Una finestra circolare scivola verso la zona più densa di punti, spostando il proprio centro sulla media dei punti che contiene, finché non si ferma su una moda.</p>
+
+<div class="bar">
+  <div class="seg" role="group" aria-label="Modalità">
+    <button id="m1" class="on">Una finestra</button><button id="m2">Tutti i punti</button>
+  </div>
+  <label>Raggio (h) <input type="range" id="h" min="30" max="200" value="90"><span id="hv">90</span></label>
+  <label>Kernel <select id="k"><option value="flat">Piatto</option><option value="gauss">Gaussiano</option></select></label>
+  <label>Velocità <input type="range" id="sp" min="1" max="5" value="3"></label>
+</div>
+
+<div class="stage"><canvas id="cv" aria-label="Grafico interattivo del mean shift"></canvas></div>
+<div class="leg">
+  <span><i style="background:var(--pt)"></i>punti dati</span>
+  <span><i style="background:var(--win)"></i>finestra</span>
+  <span><i style="background:var(--mean)"></i>media dei punti nella finestra</span>
+</div>
+
+<div class="bar">
+  <button id="step" class="pri">Passo</button>
+  <button id="play">Avvia</button>
+  <button id="reset">Ricomincia</button>
+  <button id="regen">Nuovi dati</button>
+</div>
+
+<div class="info">
+  <div><b id="i1">0</b><span>iterazione</span></div>
+  <div><b id="i2">0</b><span>punti nella finestra</span></div>
+  <div><b id="i3">–</b><span>spostamento (px)</span></div>
+  <div><b id="i4">–</b><span id="l4">stato</span></div>
+</div>
+<div id="msg" role="status"></div>
+
+<section class="how">
+  <h2>Cosa succede a ogni passo</h2>
+  <p>1. Si prendono i punti dentro la finestra. </p>
+  <p>2. Si calcola la loro media</p><code>m(x) = Σ K(xᵢ − x)·xᵢ / Σ K(xᵢ − x)</code>. <p>  3. Il centro si sposta in <code>m(x)</code>. </p> <p>Si ripete finché lo spostamento è quasi nullo: lì la densità ha un massimo locale.</p>
+  <p>Con il raggio piccolo emergono molti gruppi, con il raggio grande i gruppi si fondono. Il numero di gruppi non va scelto in anticipo: lo decide il raggio. Nella modalità «Tutti i punti» ogni punto parte con la sua finestra e finisce sulla moda a cui appartiene.</p>
+</section>
+</main>
+
+<script>
+const $=id=>document.getElementById(id), cv=$('cv'), ctx=cv.getContext('2d');
+const css=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+let W,H,dpr,D=[],P0=[],h=90,kernel='flat',mode=1,playing=false,seed=11,S,A,last=0,drag=false;
+const rnd=()=>(seed=seed*16807%2147483647)/2147483647;
+const gauss=()=>Math.sqrt(-2*Math.log(rnd()+1e-9))*Math.cos(6.2832*rnd());
+function gen(){D=[];for(const[cx,cy,s]of[[.2,.35,.05],[.52,.7,.055],[.8,.32,.05]])for(let i=0;i<55;i++)D.push([cx+gauss()*s,cy+gauss()*s*1.5])}
+function size(){dpr=devicePixelRatio||1;W=cv.parentElement.clientWidth;H=Math.max(300,Math.min(460,W*.55));cv.width=W*dpr;cv.height=H*dpr;cv.style.height=H+'px';ctx.setTransform(dpr,0,0,dpr,0,0);P0=D.map(d=>[d[0]*W,d[1]*H])}
+const wt=d=>kernel==='flat'?(d<=h?1:0):(d>h*1.5?0:Math.exp(-d*d/(2*(h/2)**2)));
+function mean(c){let sx=0,sy=0,sw=0,n=0;for(const p of P0){const w=wt(Math.hypot(p[0]-c[0],p[1]-c[1]));if(w>0){sx+=w*p[0];sy+=w*p[1];sw+=w;n++}}return sw?[sx/sw,sy/sw,n]:null}
+function init(){
+  S={c:S&&S.c?S.c.slice():[W*.42,H*.5],m:null,trail:[],tw:null,it:0,done:false,n:0};S.trail=[S.c.slice()];
+  A={cur:P0.map(p=>p.slice()),from:null,to:null,tw:null,it:0,done:false,lab:null,k:0,maxs:0};
+  playing=false;$('play').textContent='Avvia';
+  msg(mode===1?'Clicca o trascina sul grafico per scegliere dove parte la finestra, poi premi «Passo».':'Ogni punto parte con la sua finestra. Premi «Passo» o «Avvia» per vederli scivolare verso le mode.');
+  upd();
+}
+function msg(t){$('msg').textContent=t}
+function upd(){
+  if(mode===1){$('i1').textContent=S.it;$('i2').textContent=S.m?S.m[2]:(mean(S.c)||[0,0,0])[2];
+    $('i3').textContent=S.m?Math.hypot(S.m[0]-S.c[0],S.m[1]-S.c[1]).toFixed(1):'–';$('l4').textContent='stato';$('i4').textContent=S.done?'convergenza':'in corso'}
+  else{$('i1').textContent=A.it;$('i2').textContent=P0.length;$('i3').textContent=A.it?A.maxs.toFixed(1):'–';$('l4').textContent='gruppi trovati';$('i4').textContent=A.done?A.k:'–'}
+}
+const dur=()=>[1100,800,550,320,170][$('sp').value-1];
+function step(){const now=performance.now();
+  if(mode===1){
+    if(S.tw||S.done)return;
+    const m=mean(S.c);
+    if(!m){S.done=true;msg('Nessun punto nella finestra: aumenta il raggio o sposta il centro.');upd();return}
+    const sh=Math.hypot(m[0]-S.c[0],m[1]-S.c[1]);S.m=m;
+    if(sh<.5){S.done=true;S.m=null;playing=false;$('play').textContent='Avvia';msg('Convergenza: la media coincide con il centro. La finestra è su una moda, cioè su un massimo locale della densità.');upd();return}
+    S.tw={from:S.c.slice(),to:[m[0],m[1]],t0:now+Math.min(300,dur()*.5),d:dur()};
+    msg(`Dentro la finestra ci sono ${m[2]} punti. La loro media (in giallo) dista ${sh.toFixed(1)} px dal centro: il centro si sposta lì.`);upd();
+  }else{
+    if(A.tw||A.done)return;
+    let mx=0;const to=A.cur.map(c=>{const m=mean(c);if(!m)return c.slice();mx=Math.max(mx,Math.hypot(m[0]-c[0],m[1]-c[1]));return[m[0],m[1]]});
+    A.maxs=mx;A.from=A.cur.map(c=>c.slice());A.to=to;A.tw={t0:now,d:dur()*1.2};
+    msg(mx<.5?'Nessun punto si muove più: tutti hanno raggiunto una moda.':`Iterazione ${A.it+1}: ogni punto si sposta nella media dei punti attorno a sé. Lo spostamento massimo è ${mx.toFixed(1)} px.`);upd();
+  }
+}
+function finishAll(){
+  const modes=[];A.lab=A.cur.map(c=>{let j=modes.findIndex(m=>Math.hypot(m[0]-c[0],m[1]-c[1])<h*.4);if(j<0){modes.push(c);j=modes.length-1}return j});
+  A.k=modes.length;A.done=true;playing=false;$('play').textContent='Avvia';
+  msg(`Convergenza: i punti si sono raccolti in ${A.k} ${A.k===1?'moda':'mode'}. Ogni colore è un gruppo. Prova a cambiare il raggio e a ricominciare.`);upd();
+}
+const ease=t=>t<.5?2*t*t:1-Math.pow(-2*t+2,2)/2;
+const COL=()=>[css('--c0'),css('--c1'),css('--c2'),css('--c3'),css('--c4')];
+function draw(now){
+  // avanzamento animazioni
+  if(mode===1&&S.tw&&now>=S.tw.t0){const t=Math.min(1,(now-S.tw.t0)/S.tw.d),e=ease(t);
+    S.c=[S.tw.from[0]+(S.tw.to[0]-S.tw.from[0])*e,S.tw.from[1]+(S.tw.to[1]-S.tw.from[1])*e];
+    if(t>=1){S.c=S.tw.to;S.trail.push(S.c.slice());S.tw=null;S.m=null;S.it++;upd()}}
+  if(mode===2&&A.tw){const t=Math.min(1,(now-A.tw.t0)/A.tw.d),e=ease(t);
+    A.cur=A.from.map((f,i)=>[f[0]+(A.to[i][0]-f[0])*e,f[1]+(A.to[i][1]-f[1])*e]);
+    if(t>=1){A.cur=A.to;A.tw=null;A.it++;if(A.maxs<.5)finishAll();else upd()}}
+  if(playing&&!(S.tw||A.tw)&&!(mode===1?S.done:A.done)&&now-last>150){last=now;step()}
+  const pt=css('--pt'),win=css('--win'),mn=css('--mean'),line=css('--line'),cols=COL();
+  ctx.clearRect(0,0,W,H);
+  if(mode===1){
+    const m0=S.m,c=S.c;
+    // punti
+    for(const p of P0){const w=wt(Math.hypot(p[0]-c[0],p[1]-c[1]));ctx.globalAlpha=w>0?.35+.65*Math.min(1,w):.28;ctx.fillStyle=w>0?win:pt;
+      ctx.beginPath();ctx.arc(p[0],p[1],w>0?4.2:3.2,0,7);ctx.fill()}
+    ctx.globalAlpha=1;
+    // traccia
+    if(S.trail.length>1){ctx.strokeStyle=win;ctx.globalAlpha=.5;ctx.lineWidth=1.5;ctx.beginPath();S.trail.forEach((p,i)=>i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1]));ctx.stroke();ctx.globalAlpha=1}
+    for(const p of S.trail){ctx.fillStyle=win;ctx.globalAlpha=.5;ctx.beginPath();ctx.arc(p[0],p[1],2.5,0,7);ctx.fill()}
+    ctx.globalAlpha=1;
+    // finestra
+    ctx.fillStyle=win;ctx.globalAlpha=.1;ctx.beginPath();ctx.arc(c[0],c[1],h,0,7);ctx.fill();
+    ctx.globalAlpha=1;ctx.strokeStyle=win;ctx.lineWidth=2;ctx.beginPath();ctx.arc(c[0],c[1],h,0,7);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(c[0]-6,c[1]);ctx.lineTo(c[0]+6,c[1]);ctx.moveTo(c[0],c[1]-6);ctx.lineTo(c[0],c[1]+6);ctx.stroke();
+    // media e freccia
+    if(m0){ctx.strokeStyle=mn;ctx.fillStyle=mn;ctx.lineWidth=2.5;ctx.setLineDash([6,4]);ctx.beginPath();ctx.moveTo(c[0],c[1]);ctx.lineTo(m0[0],m0[1]);ctx.stroke();ctx.setLineDash([]);
+      ctx.beginPath();ctx.arc(m0[0],m0[1],7,0,7);ctx.fill();ctx.strokeStyle=css('--panel');ctx.lineWidth=2;ctx.stroke()}
+  }else{
+    for(let i=0;i<P0.length;i++){const a=P0[i],b=A.cur[i],col=A.lab?cols[A.lab[i]%5]:win;
+      ctx.strokeStyle=col;ctx.globalAlpha=.22;ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);ctx.stroke();
+      ctx.globalAlpha=.3;ctx.fillStyle=pt;ctx.beginPath();ctx.arc(a[0],a[1],2.5,0,7);ctx.fill();
+      ctx.globalAlpha=1;ctx.fillStyle=col;ctx.beginPath();ctx.arc(b[0],b[1],3.8,0,7);ctx.fill()}
+    ctx.globalAlpha=1;
+  }
+  requestAnimationFrame(draw);
+}
+// interazione
+function pos(e){const r=cv.getBoundingClientRect();return[(e.clientX-r.left)*W/r.width,(e.clientY-r.top)*H/r.height]}
+function place(e){if(mode!==1)return;const p=pos(e);S={c:p,m:null,trail:[p.slice()],tw:null,it:0,done:false};playing=false;$('play').textContent='Avvia';
+  msg('Finestra posizionata. Premi «Passo» per calcolare la media dei punti al suo interno.');upd()}
+cv.addEventListener('pointerdown',e=>{drag=true;cv.setPointerCapture(e.pointerId);place(e)});
+cv.addEventListener('pointermove',e=>{if(drag)place(e)});
+cv.addEventListener('pointerup',()=>drag=false);
+$('step').onclick=()=>{playing=false;$('play').textContent='Avvia';step()};
+$('play').onclick=()=>{playing=!playing;$('play').textContent=playing?'Pausa':'Avvia';if(playing&&(mode===1?S.done:A.done))init(),playing=true,$('play').textContent='Pausa'};
+$('reset').onclick=()=>init();
+$('regen').onclick=()=>{seed=Math.floor(Math.random()*1e6)+1;gen();size();S=null;init()};
+$('h').oninput=e=>{h=+e.target.value;$('hv').textContent=h;init()};
+$('k').onchange=e=>{kernel=e.target.value;init()};
+function setMode(m){mode=m;$('m1').classList.toggle('on',m===1);$('m2').classList.toggle('on',m===2);init()}
+$('m1').onclick=()=>setMode(1);$('m2').onclick=()=>setMode(2);
+addEventListener('resize',()=>{size();S=null;init()});
+gen();size();init();requestAnimationFrame(draw);
+</script>
+</body>
+</html>
